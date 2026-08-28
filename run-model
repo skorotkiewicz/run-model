@@ -315,7 +315,7 @@ def main():
         return 0
     if arguments and arguments[0] == "edit":
         return edit_model(" ".join(arguments[1:]))
-    if arguments and arguments[0] == "remove":
+    if arguments and arguments[0] in {"remove", "del"}:
         return remove_model(" ".join(arguments[1:]))
     if arguments == ["--self-test"]:
         return self_test()
