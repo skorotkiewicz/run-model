@@ -87,6 +87,10 @@ def edit_arguments(arguments):
     def save(event):
         event.app.exit(result=event.app.current_buffer.text)
 
+    @bindings.add("f3")
+    def clear(event):
+        event.app.current_buffer.text = ""
+
     @bindings.add("c-c")
     def cancel(event):
         event.app.exit(result=None)
@@ -100,7 +104,7 @@ def edit_arguments(arguments):
             multiline=True,
             key_bindings=bindings,
             prompt_continuation=lambda width, line_number, is_soft_wrap: "... ",
-            bottom_toolbar=lambda: error_message or "Arrows move | Enter new line | Ctrl+S/F2 save | Ctrl+C cancel",
+            bottom_toolbar=lambda: error_message or "Arrows move | Enter new line | F3 clear | Ctrl+S/F2 save | Ctrl+C cancel",
             mouse_support=True,
         )
         if text is None:
