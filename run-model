@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Select, create, and run local run-*.sh model scripts."""
+"""Select, configure, and run local models."""
 
 import argparse
+import json
 import os
-import re
 import shlex
 import shutil
-import stat
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+CONFIG = ROOT / "models.json"
 DEFAULT_RUNNER = "./llama-cpp-new/build/bin/llama-server"
 DEFAULT_ARGS = (
     "--host 0.0.0.0 --port 8888 --temp 0.6 --top-p 0.95 --top-k 20 "
@@ -19,7 +19,7 @@ DEFAULT_ARGS = (
 )
 
 
-def select(options, prompt, query="", preview=False):
+def select(options, prompt, query=""):
     if not options:
         return None
 
@@ -27,8 +27,6 @@ def select(options, prompt, query="", preview=False):
         command = [fzf, "--height=80%", "--layout=reverse", "--border", "--prompt", prompt]
         if query:
             command += ["--query", query]
-        if preview:
-            command += ["--preview", "sed -n '1,160p' -- {}"]
         result = subprocess.run(command, input="\n".join(options), text=True, stdout=subprocess.PIPE, cwd=ROOT)
         return result.stdout.rstrip("\n") or None
 
@@ -54,75 +52,105 @@ def ask(label, default=""):
         raise SystemExit(130)
 
 
-def safe_name(name):
-    return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-")
+def load_models():
+    try:
+        models = json.loads(CONFIG.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"Cannot read {CONFIG}: {error}")
+
+    if not isinstance(models, list):
+        raise SystemExit(f"{CONFIG} must contain a JSON list")
+    for model in models:
+        valid = (
+            isinstance(model, dict)
+            and all(isinstance(model.get(key), str) and model[key] for key in ("name", "model", "runner"))
+            and isinstance(model.get("args"), list)
+            and all(isinstance(value, str) for value in model["args"])
+        )
+        if not valid:
+            raise SystemExit(f"Invalid model entry in {CONFIG}")
+    return models
 
 
-def script_text(runner, model, server_args):
-    command = shlex.join([runner, "-m", model, *shlex.split(server_args)])
-    return f"#!/usr/bin/env bash\n\nexec {command}\n"
+def save_models(models):
+    temporary = CONFIG.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(models, indent=2) + "\n")
+    temporary.replace(CONFIG)
 
 
-def add_script(arguments):
-    parser = argparse.ArgumentParser(prog="run-model add", description="Create a run-<name>.sh script.")
+def add_model(arguments):
+    parser = argparse.ArgumentParser(prog="run-model add", description="Add a model to models.json.")
     parser.add_argument("model", nargs="?", help="GGUF model path")
-    parser.add_argument("--name", help="name used after run-")
+    parser.add_argument("--name", help="display name")
     parser.add_argument("--runner", help="server executable")
     parser.add_argument("--args", dest="server_args", help="quoted server arguments")
     args = parser.parse_args(arguments)
 
-    model = args.model
-    if not model:
+    model_path = args.model
+    if not model_path:
         models_dir = Path(os.environ.get("RUN_MODEL_MODELS", "/models"))
         try:
-            models = sorted((str(path) for path in models_dir.glob("*.gguf")), key=str.casefold)
+            paths = sorted((str(path) for path in models_dir.glob("*.gguf")), key=str.casefold)
         except OSError:
-            models = []
-        model = select(models, "model > ") if models else None
-        model = model or ask("Model path")
+            paths = []
+        model_path = select(paths, "model > ") if paths else None
+        model_path = model_path or ask("Model path")
 
-    name = safe_name(args.name or ask("Name", Path(model).stem))
+    name = (args.name or ask("Name", Path(model_path).stem)).strip()
     if not name:
-        print("Name must contain a letter, number, dot, dash, or underscore.", file=sys.stderr)
+        print("Name cannot be empty.", file=sys.stderr)
         return 2
 
-    target = ROOT / f"run-{name}.sh"
-    if target.exists():
-        print(f"Refusing to overwrite {target.name}", file=sys.stderr)
+    models = load_models()
+    if any(model["name"].casefold() == name.casefold() for model in models):
+        print(f"A model named {name!r} already exists in {CONFIG}", file=sys.stderr)
         return 2
 
     runner = args.runner or ask("Runner", DEFAULT_RUNNER)
     server_args = args.server_args if args.server_args is not None else ask("Server arguments", DEFAULT_ARGS)
     try:
-        target.write_text(script_text(runner, model, server_args))
+        parsed_args = shlex.split(server_args)
     except ValueError as error:
         print(f"Invalid server arguments: {error}", file=sys.stderr)
         return 2
-    target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    print(f"Created {target.name}")
+
+    models.append({"name": name, "model": model_path, "runner": runner, "args": parsed_args})
+    save_models(models)
+    print(f"Added {name!r} to {CONFIG}")
     return 0
 
 
 def run(query=""):
-    scripts = sorted(ROOT.glob("run-*.sh"), key=lambda path: path.name.casefold())
-    if not scripts:
-        print("No run-*.sh scripts found. Create one with: ./run-model add", file=sys.stderr)
+    models = load_models()
+    if not models:
+        print(f"No models in {CONFIG}. Add one with: ./run-model add", file=sys.stderr)
         return 1
 
-    names = [path.name for path in scripts]
-    selected = select(names, "model > ", query, preview=True)
+    labels = {f"{model['name']}  {model['model']}": model for model in models}
+    selected = select(list(labels), "model > ", query)
     if not selected:
         return 0
 
+    model = labels[selected]
+    command = [model["runner"], "-m", model["model"], *model["args"]]
     os.chdir(ROOT)
-    os.execvp("bash", ["bash", selected])
-    return 0
+    try:
+        os.execvp(command[0], command)
+    except OSError as error:
+        print(f"Cannot start {command[0]}: {error}", file=sys.stderr)
+        return 126
 
 
 def self_test():
-    assert safe_name("My Model / Q4") == "My-Model-Q4"
-    text = script_text("./llama server", "/models/My Model.gguf", "--port 8888 --flash-attn on")
-    assert shlex.split(text.splitlines()[-1][5:]) == [
+    entry = {
+        "name": "My Model",
+        "model": "/models/My Model.gguf",
+        "runner": "./llama server",
+        "args": shlex.split("--port 8888 --flash-attn on"),
+    }
+    assert [entry["runner"], "-m", entry["model"], *entry["args"]] == [
         "./llama server", "-m", "/models/My Model.gguf", "--port", "8888", "--flash-attn", "on"
     ]
     print("self-test passed")
@@ -132,11 +160,18 @@ def self_test():
 def main():
     arguments = sys.argv[1:]
     if arguments and arguments[0] == "add":
-        return add_script(arguments[1:])
+        return add_model(arguments[1:])
+    if arguments == ["config"]:
+        print(CONFIG)
+        return 0
     if arguments == ["--self-test"]:
         return self_test()
     if arguments and arguments[0] in {"-h", "--help"}:
-        print("Usage: run-model [SEARCH]\n       run-model add [MODEL] [--name NAME] [--runner PATH] [--args '...']")
+        print(
+            "Usage: run-model [SEARCH]\n"
+            "       run-model add [MODEL] [--name NAME] [--runner PATH] [--args '...']\n"
+            "       run-model config"
+        )
         return 0
     return run(" ".join(arguments))
 
