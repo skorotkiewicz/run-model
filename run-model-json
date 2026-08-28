@@ -167,7 +167,7 @@ def add_model(arguments):
     if not model_path:
         models_dir = Path(os.environ.get("RUN_MODEL_MODELS", "/models"))
         try:
-            paths = sorted((str(path) for path in models_dir.glob("*.gguf")), key=str.casefold)
+            paths = sorted((str(path) for path in models_dir.rglob("*.gguf")), key=str.casefold)
         except OSError:
             paths = []
         model_path = select(paths, "model > ") if paths else None
