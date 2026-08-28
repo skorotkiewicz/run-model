@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+
+import shlex
+import sys
+
+print(f"argument count: {len(sys.argv) - 1}")
+for index, argument in enumerate(sys.argv[1:], 1):
+    print(f"{index:>3}: {argument!r}")
+print(f"command: {shlex.join(sys.argv)}")
