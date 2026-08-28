@@ -26,6 +26,12 @@ Both versions provide the same model selection, argument editor, and custom runn
 
 The manager uses `fzf` when it is available. Otherwise, it shows a numbered menu.
 
+`add` scans `/models/*.gguf`. Override the directory when needed:
+
+```bash
+RUN_MODEL_MODELS=/another/path ./run-model add
+```
+
 ## Commands
 
 ```bash
@@ -68,6 +74,17 @@ Import rejects duplicate names. Use `--replace` to update matching models.
 The SQLite version stores settings in `models.db`. The JSON version uses `models.json`.
 
 Both files stay beside their executable. Each model has a name, model path, runner path, and argument list.
+
+## Short command
+
+A wrapper works well:
+
+```bash
+#!/usr/bin/env bash
+exec uv run --project "$(dirname "$0")" "$(dirname "$0")/run-model-json" "$@"
+```
+
+See [wrapper.md](wrapper.md) for detailed setup.
 
 ## Test a runner
 
