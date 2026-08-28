@@ -132,7 +132,7 @@ def load_models():
     if not DATABASE.exists():
         return []
     try:
-        with DATABASE.open("r") as f:
+        with DATABASE.open("r", encoding="utf-8") as f:
             models = json.load(f)
         validate_models(models)
         for i, model in enumerate(models):
@@ -149,7 +149,7 @@ def save_models(models):
     ]
     temporary = DATABASE.with_name(f".{DATABASE.name}.tmp")
     try:
-        temporary.write_text(json.dumps(save_list, indent=2) + "\n")
+        temporary.write_text(json.dumps(save_list, indent=2) + "\n", encoding="utf-8")
         temporary.replace(DATABASE)
     except OSError as error:
         raise SystemExit(f"Cannot write {DATABASE}: {error}")
