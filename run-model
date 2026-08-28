@@ -73,6 +73,18 @@ def format_arguments(arguments):
     return "\n".join(lines)
 
 
+def split_arguments(text):
+    text = text.replace("\\\r\n", "").replace("\\\n", "")
+    arguments = []
+    for argument in shlex.split(text):
+        if "\n" in argument or "\r" in argument:
+            argument = argument.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+            if not argument.strip():
+                continue
+        arguments.append(argument)
+    return arguments
+
+
 def edit_arguments(arguments):
     try:
         from prompt_toolkit import prompt
@@ -110,7 +122,7 @@ def edit_arguments(arguments):
         if text is None:
             return None
         try:
-            return shlex.split(text)
+            return split_arguments(text)
         except ValueError as error:
             error_message = f"Invalid arguments: {error}"
 
@@ -135,7 +147,9 @@ def load_models():
         models = []
         for row in database.execute("SELECT id, name, model, runner, args FROM models ORDER BY name"):
             args = json.loads(row["args"])
-            if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
+            if not isinstance(args, list) or not all(
+                isinstance(value, str) and "\n" not in value and "\r" not in value for value in args
+            ):
                 raise ValueError(f"invalid arguments for model {row['name']!r}")
             models.append({**dict(row), "args": args})
         return models
@@ -157,7 +171,10 @@ def validate_import(models):
             and set(model) == expected_fields
             and all(isinstance(model[field], str) and model[field] for field in ("name", "model", "runner"))
             and isinstance(model["args"], list)
-            and all(isinstance(argument, str) for argument in model["args"])
+            and all(
+                isinstance(argument, str) and "\n" not in argument and "\r" not in argument
+                for argument in model["args"]
+            )
         )
         if not valid:
             raise ValueError(f"invalid model at position {index}")
@@ -260,9 +277,9 @@ def add_model(arguments):
     runner = args.runner or ask("Runner", DEFAULT_RUNNER)
     try:
         parsed_args = (
-            shlex.split(args.server_args)
+            split_arguments(args.server_args)
             if args.server_args is not None
-            else edit_arguments(shlex.split(DEFAULT_ARGS))
+            else edit_arguments(split_arguments(DEFAULT_ARGS))
         )
     except ValueError as error:
         print(f"Invalid server arguments: {error}", file=sys.stderr)
