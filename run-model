@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Select, create, and run local run-*.sh model scripts."""
+
+import argparse
+import os
+import re
+import shlex
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+DEFAULT_RUNNER = "./llama-cpp-new/build/bin/llama-server"
+DEFAULT_ARGS = (
+    "--host 0.0.0.0 --port 8888 --temp 0.6 --top-p 0.95 --top-k 20 "
+    "--min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0 -c 65536"
+)
+
+
+def select(options, prompt, query="", preview=False):
+    if not options:
+        return None
+
+    if fzf := shutil.which("fzf"):
+        command = [fzf, "--height=80%", "--layout=reverse", "--border", "--prompt", prompt]
+        if query:
+            command += ["--query", query]
+        if preview:
+            command += ["--preview", "sed -n '1,160p' -- {}"]
+        result = subprocess.run(command, input="\n".join(options), text=True, stdout=subprocess.PIPE, cwd=ROOT)
+        return result.stdout.rstrip("\n") or None
+
+    matches = [item for item in options if query.casefold() in item.casefold()]
+    if len(matches) == 1:
+        return matches[0]
+    options = matches or options
+    for number, item in enumerate(options, 1):
+        print(f"{number:>3}  {item}")
+    try:
+        answer = input(f"{prompt.strip()} number: ").strip()
+        return options[int(answer) - 1] if answer else None
+    except (EOFError, KeyboardInterrupt, ValueError, IndexError):
+        return None
+
+
+def ask(label, default=""):
+    suffix = f" [{default}]" if default else ""
+    try:
+        return input(f"{label}{suffix}: ").strip() or default
+    except (EOFError, KeyboardInterrupt):
+        print()
+        raise SystemExit(130)
+
+
+def safe_name(name):
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip(".-")
+
+
+def script_text(runner, model, server_args):
+    command = shlex.join([runner, "-m", model, *shlex.split(server_args)])
+    return f"#!/usr/bin/env bash\n\nexec {command}\n"
+
+
+def add_script(arguments):
+    parser = argparse.ArgumentParser(prog="run-model add", description="Create a run-<name>.sh script.")
+    parser.add_argument("model", nargs="?", help="GGUF model path")
+    parser.add_argument("--name", help="name used after run-")
+    parser.add_argument("--runner", help="server executable")
+    parser.add_argument("--args", dest="server_args", help="quoted server arguments")
+    args = parser.parse_args(arguments)
+
+    model = args.model
+    if not model:
+        models_dir = Path(os.environ.get("RUN_MODEL_MODELS", "/models"))
+        try:
+            models = sorted((str(path) for path in models_dir.glob("*.gguf")), key=str.casefold)
+        except OSError:
+            models = []
+        model = select(models, "model > ") if models else None
+        model = model or ask("Model path")
+
+    name = safe_name(args.name or ask("Name", Path(model).stem))
+    if not name:
+        print("Name must contain a letter, number, dot, dash, or underscore.", file=sys.stderr)
+        return 2
+
+    target = ROOT / f"run-{name}.sh"
+    if target.exists():
+        print(f"Refusing to overwrite {target.name}", file=sys.stderr)
+        return 2
+
+    runner = args.runner or ask("Runner", DEFAULT_RUNNER)
+    server_args = args.server_args if args.server_args is not None else ask("Server arguments", DEFAULT_ARGS)
+    try:
+        target.write_text(script_text(runner, model, server_args))
+    except ValueError as error:
+        print(f"Invalid server arguments: {error}", file=sys.stderr)
+        return 2
+    target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    print(f"Created {target.name}")
+    return 0
+
+
+def run(query=""):
+    scripts = sorted(ROOT.glob("run-*.sh"), key=lambda path: path.name.casefold())
+    if not scripts:
+        print("No run-*.sh scripts found. Create one with: ./run-model add", file=sys.stderr)
+        return 1
+
+    names = [path.name for path in scripts]
+    selected = select(names, "model > ", query, preview=True)
+    if not selected:
+        return 0
+
+    os.chdir(ROOT)
+    os.execvp("bash", ["bash", selected])
+    return 0
+
+
+def self_test():
+    assert safe_name("My Model / Q4") == "My-Model-Q4"
+    text = script_text("./llama server", "/models/My Model.gguf", "--port 8888 --flash-attn on")
+    assert shlex.split(text.splitlines()[-1][5:]) == [
+        "./llama server", "-m", "/models/My Model.gguf", "--port", "8888", "--flash-attn", "on"
+    ]
+    print("self-test passed")
+    return 0
+
+
+def main():
+    arguments = sys.argv[1:]
+    if arguments and arguments[0] == "add":
+        return add_script(arguments[1:])
+    if arguments == ["--self-test"]:
+        return self_test()
+    if arguments and arguments[0] in {"-h", "--help"}:
+        print("Usage: run-model [SEARCH]\n       run-model add [MODEL] [--name NAME] [--runner PATH] [--args '...']")
+        return 0
+    return run(" ".join(arguments))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
