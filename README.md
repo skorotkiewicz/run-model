@@ -8,11 +8,21 @@ Pick, configure, and run one local GGUF model.
 uv sync
 ```
 
-Run the manager through the uv environment:
+Run either version through the uv environment:
 
 ```bash
-uv run ./run-model
+uv run ./run-model       # SQLite
+uv run ./run-model.py    # JSON
 ```
+
+## Versions
+
+| Command | Storage | Notes |
+| --- | --- | --- |
+| `./run-model` | `models.db` | SQLite storage with JSON import and export |
+| `./run-model.py` | `models.json` | Human-readable JSON storage |
+
+Both versions provide the same model selection, argument editor, and custom runner support.
 
 The manager uses `fzf` when it is available. Otherwise, it shows a numbered menu.
 
@@ -43,7 +53,7 @@ uv run ./run-model config           # Show the SQLite path
 
 The manager passes the model as `-m MODEL`, followed by the saved arguments.
 
-## JSON backup
+## SQLite JSON backup
 
 ```bash
 uv run ./run-model export models.json
@@ -55,9 +65,9 @@ Import rejects duplicate names. Use `--replace` to update matching models.
 
 ## Storage
 
-The manager stores settings in `models.db` beside the executable.
+The SQLite version stores settings in `models.db`. The JSON version uses `models.json`.
 
-Each model has a name, model path, runner path, and argument list.
+Both files stay beside their executable. Each model has a name, model path, runner path, and argument list.
 
 ## Test a runner
 
