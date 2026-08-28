@@ -143,16 +143,28 @@ def run(query=""):
         return 126
 
 
-def edit_config():
-    if not CONFIG.exists():
-        save_models([])
+def edit_model(query=""):
+    models = load_models()
+    if not models:
+        print(f"No models in {CONFIG}. Add one with: ./run-model add", file=sys.stderr)
+        return 1
 
+    labels = {f"{model['name']}  {model['model']}": model for model in models}
+    selected = select(list(labels), "edit > ", query)
+    if not selected:
+        return 0
+
+    name = json.dumps(labels[selected]["name"])
+    line = next((
+        number for number, text in enumerate(CONFIG.read_text().splitlines(), 1)
+        if '"name"' in text and name in text
+    ), 1)
     editor = os.environ.get("EDITOR") or shutil.which("nano") or shutil.which("vi")
     if not editor:
         print("Set $EDITOR or install nano/vi.", file=sys.stderr)
         return 1
     try:
-        command = [*shlex.split(editor), str(CONFIG)]
+        command = [*shlex.split(editor), f"+{line}", str(CONFIG)]
         os.execvp(command[0], command)
     except (OSError, ValueError, IndexError) as error:
         print(f"Cannot start editor: {error}", file=sys.stderr)
@@ -180,15 +192,15 @@ def main():
     if arguments == ["config"]:
         print(CONFIG)
         return 0
-    if arguments == ["edit"]:
-        return edit_config()
+    if arguments and arguments[0] == "edit":
+        return edit_model(" ".join(arguments[1:]))
     if arguments == ["--self-test"]:
         return self_test()
     if arguments and arguments[0] in {"-h", "--help"}:
         print(
             "Usage: run-model [SEARCH]\n"
             "       run-model add [MODEL] [--name NAME] [--runner PATH] [--args '...']\n"
-            "       run-model edit\n"
+            "       run-model edit [SEARCH]\n"
             "       run-model config"
         )
         return 0
