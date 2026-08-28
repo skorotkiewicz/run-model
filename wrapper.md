@@ -1,10 +1,10 @@
 # Wrapper
 
-The wrapper replaces commands such as `uv run ./run-model-json add` with `run add`.
+The wrapper replaces commands such as `uv run ./run-model-json add` with `model add`.
 
 ## Create the wrapper
 
-Create `run` in the project directory:
+Create `model` in the project directory:
 
 ```bash
 #!/usr/bin/env bash
@@ -15,17 +15,17 @@ exec uv run --project "$ROOT" "$ROOT/run-model-json" "$@"
 Make it executable:
 
 ```bash
-chmod +x run
+chmod +x model
 ```
 
 Use it from the project directory:
 
 ```bash
-./run
-./run add
-./run edit
-./run remove
-./run gemma
+./model
+./model add
+./model edit
+./model remove
+./model gemma
 ```
 
 ## Use it from any directory
@@ -42,15 +42,15 @@ Create a symlink:
 
 ```bash
 mkdir -p ~/.local/bin
-ln -s "$PWD/run" ~/.local/bin/run
+ln -s "$PWD/model" ~/.local/bin/model
 ```
 
 You can now run:
 
 ```bash
-run add
-run edit
-run gemma
+model add
+model edit
+model gemma
 ```
 
 The wrapper uses `readlink -f`, so it finds the project through the symlink.
