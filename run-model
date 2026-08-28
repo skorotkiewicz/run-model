@@ -74,6 +74,20 @@ def edit_line(label, value):
         readline.set_startup_hook()
 
 
+def read_arguments(first_line):
+    lines = []
+    line = first_line
+    try:
+        while line.rstrip().endswith("\\"):
+            lines.append(line.rstrip()[:-1])
+            line = input("... ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        raise SystemExit(130)
+    lines.append(line)
+    return shlex.split(" ".join(lines))
+
+
 def connect():
     database = None
     try:
@@ -128,9 +142,12 @@ def add_model(arguments):
         return 2
 
     runner = args.runner or ask("Runner", DEFAULT_RUNNER)
-    server_args = args.server_args if args.server_args is not None else ask("Server arguments", DEFAULT_ARGS)
     try:
-        parsed_args = shlex.split(server_args)
+        parsed_args = (
+            shlex.split(args.server_args)
+            if args.server_args is not None
+            else read_arguments(ask("Server arguments", DEFAULT_ARGS))
+        )
     except ValueError as error:
         print(f"Invalid server arguments: {error}", file=sys.stderr)
         return 2
@@ -192,7 +209,7 @@ def edit_model(query=""):
     model_path = ask("Model path", model["model"])
     runner = ask("Runner", model["runner"])
     try:
-        parsed_args = shlex.split(edit_line("Server arguments", shlex.join(model["args"])))
+        parsed_args = read_arguments(edit_line("Server arguments", shlex.join(model["args"])))
     except ValueError as error:
         print(f"Invalid server arguments: {error}", file=sys.stderr)
         return 2
