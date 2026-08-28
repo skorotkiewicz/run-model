@@ -145,6 +145,95 @@ def load_models():
         database.close()
 
 
+def validate_import(models):
+    if not isinstance(models, list):
+        raise ValueError("JSON must contain a list of models")
+
+    names = set()
+    expected_fields = {"name", "model", "runner", "args"}
+    for index, model in enumerate(models, 1):
+        valid = (
+            isinstance(model, dict)
+            and set(model) == expected_fields
+            and all(isinstance(model[field], str) and model[field] for field in ("name", "model", "runner"))
+            and isinstance(model["args"], list)
+            and all(isinstance(argument, str) for argument in model["args"])
+        )
+        if not valid:
+            raise ValueError(f"invalid model at position {index}")
+        name = model["name"].casefold()
+        if name in names:
+            raise ValueError(f"duplicate model name {model['name']!r}")
+        names.add(name)
+    return models
+
+
+def import_rows(database, models, replace):
+    statement = "INSERT INTO models (name, model, runner, args) VALUES (?, ?, ?, ?)"
+    if replace:
+        statement += (
+            " ON CONFLICT(name) DO UPDATE SET model = excluded.model, "
+            "runner = excluded.runner, args = excluded.args"
+        )
+    database.executemany(
+        statement,
+        ((model["name"], model["model"], model["runner"], json.dumps(model["args"])) for model in models),
+    )
+
+
+def export_json(arguments):
+    parser = argparse.ArgumentParser(prog="run-model export", description="Export models to JSON.")
+    parser.add_argument("file", type=Path)
+    args = parser.parse_args(arguments)
+
+    if args.file.resolve() == DATABASE.resolve():
+        print("Refusing to overwrite the SQLite database.", file=sys.stderr)
+        return 2
+    models = [
+        {field: model[field] for field in ("name", "model", "runner", "args")}
+        for model in load_models()
+    ]
+    temporary = args.file.with_name(f".{args.file.name}.tmp")
+    try:
+        temporary.write_text(json.dumps(models, indent=2) + "\n")
+        temporary.replace(args.file)
+    except OSError as error:
+        print(f"Export failed: {error}", file=sys.stderr)
+        return 2
+    print(f"Exported {len(models)} models to {args.file}")
+    return 0
+
+
+def import_json(arguments):
+    parser = argparse.ArgumentParser(prog="run-model import", description="Import models from JSON.")
+    parser.add_argument("file", type=Path)
+    parser.add_argument("--replace", action="store_true", help="update models with matching names")
+    args = parser.parse_args(arguments)
+
+    try:
+        models = validate_import(json.loads(args.file.read_text()))
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        print(f"Import failed: {error}", file=sys.stderr)
+        return 2
+
+    database = connect()
+    try:
+        import_rows(database, models, args.replace)
+        database.commit()
+    except sqlite3.IntegrityError as error:
+        database.rollback()
+        print(f"Import failed: {error}. Use --replace to update existing names.", file=sys.stderr)
+        return 2
+    except sqlite3.Error as error:
+        database.rollback()
+        print(f"Import failed: {error}", file=sys.stderr)
+        return 2
+    finally:
+        database.close()
+    print(f"Imported {len(models)} models from {args.file}")
+    return 0
+
+
 def add_model(arguments):
     parser = argparse.ArgumentParser(prog="run-model add", description="Add a model to models.db.")
     parser.add_argument("model", nargs="?", help="GGUF model path")
@@ -301,6 +390,32 @@ def self_test():
     assert [row["runner"], "-m", row["model"], *json.loads(row["args"])] == [
         "./llama server", "-m", "/models/My Model.gguf", "--port", "8888", "--flash-attn", "on"
     ]
+    original_id = row["id"]
+    database.commit()
+
+    replacement = [{
+        "name": "My Model",
+        "model": "/models/My Model Q8.gguf",
+        "runner": "./new server",
+        "args": ["--port", "9999"],
+    }]
+    validate_import(replacement)
+    try:
+        import_rows(database, replacement, False)
+    except sqlite3.IntegrityError:
+        database.rollback()
+    else:
+        raise AssertionError("duplicate import should fail without replacement")
+    import_rows(database, replacement, True)
+    row = database.execute("SELECT * FROM models").fetchone()
+    assert row["id"] == original_id
+    assert row["model"] == "/models/My Model Q8.gguf"
+    try:
+        validate_import(replacement * 2)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("duplicate JSON names should fail validation")
     database.close()
     print("self-test passed")
     return 0
@@ -310,6 +425,10 @@ def main():
     arguments = sys.argv[1:]
     if arguments and arguments[0] == "add":
         return add_model(arguments[1:])
+    if arguments and arguments[0] == "export":
+        return export_json(arguments[1:])
+    if arguments and arguments[0] == "import":
+        return import_json(arguments[1:])
     if arguments == ["config"]:
         print(DATABASE)
         return 0
@@ -325,6 +444,8 @@ def main():
             "       run-model add [MODEL] [--name NAME] [--runner PATH] [--args '...']\n"
             "       run-model edit [SEARCH]\n"
             "       run-model remove [SEARCH]\n"
+            "       run-model export FILE\n"
+            "       run-model import FILE [--replace]\n"
             "       run-model config"
         )
         return 0
