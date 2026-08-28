@@ -6,17 +6,27 @@ import json
 import os
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-CONFIG = ROOT / "models.json"
+DATABASE = ROOT / "models.db"
 DEFAULT_RUNNER = "./llama-cpp-new/build/bin/llama-server"
 DEFAULT_ARGS = (
     "--host 0.0.0.0 --port 8888 --temp 0.6 --top-p 0.95 --top-k 20 "
     "--min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0 -c 65536"
 )
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS models (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    model TEXT NOT NULL,
+    runner TEXT NOT NULL,
+    args TEXT NOT NULL
+)
+"""
 
 
 def select(options, prompt, query=""):
@@ -52,36 +62,38 @@ def ask(label, default=""):
         raise SystemExit(130)
 
 
-def load_models():
+def connect():
+    database = None
     try:
-        models = json.loads(CONFIG.read_text())
-    except FileNotFoundError:
-        return []
-    except (OSError, json.JSONDecodeError) as error:
-        raise SystemExit(f"Cannot read {CONFIG}: {error}")
-
-    if not isinstance(models, list):
-        raise SystemExit(f"{CONFIG} must contain a JSON list")
-    for model in models:
-        valid = (
-            isinstance(model, dict)
-            and all(isinstance(model.get(key), str) and model[key] for key in ("name", "model", "runner"))
-            and isinstance(model.get("args"), list)
-            and all(isinstance(value, str) for value in model["args"])
-        )
-        if not valid:
-            raise SystemExit(f"Invalid model entry in {CONFIG}")
-    return models
+        database = sqlite3.connect(DATABASE)
+        database.row_factory = sqlite3.Row
+        database.execute(SCHEMA)
+        database.commit()
+        return database
+    except sqlite3.Error as error:
+        if database:
+            database.close()
+        raise SystemExit(f"Cannot open {DATABASE}: {error}")
 
 
-def save_models(models):
-    temporary = CONFIG.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(models, indent=2) + "\n")
-    temporary.replace(CONFIG)
+def load_models():
+    database = connect()
+    try:
+        models = []
+        for row in database.execute("SELECT id, name, model, runner, args FROM models ORDER BY name"):
+            args = json.loads(row["args"])
+            if not isinstance(args, list) or not all(isinstance(value, str) for value in args):
+                raise ValueError(f"invalid arguments for model {row['name']!r}")
+            models.append({**dict(row), "args": args})
+        return models
+    except (ValueError, json.JSONDecodeError, sqlite3.Error) as error:
+        raise SystemExit(f"Cannot read {DATABASE}: {error}")
+    finally:
+        database.close()
 
 
 def add_model(arguments):
-    parser = argparse.ArgumentParser(prog="run-model add", description="Add a model to models.json.")
+    parser = argparse.ArgumentParser(prog="run-model add", description="Add a model to models.db.")
     parser.add_argument("model", nargs="?", help="GGUF model path")
     parser.add_argument("--name", help="display name")
     parser.add_argument("--runner", help="server executable")
@@ -103,11 +115,6 @@ def add_model(arguments):
         print("Name cannot be empty.", file=sys.stderr)
         return 2
 
-    models = load_models()
-    if any(model["name"].casefold() == name.casefold() for model in models):
-        print(f"A model named {name!r} already exists in {CONFIG}", file=sys.stderr)
-        return 2
-
     runner = args.runner or ask("Runner", DEFAULT_RUNNER)
     server_args = args.server_args if args.server_args is not None else ask("Server arguments", DEFAULT_ARGS)
     try:
@@ -116,16 +123,26 @@ def add_model(arguments):
         print(f"Invalid server arguments: {error}", file=sys.stderr)
         return 2
 
-    models.append({"name": name, "model": model_path, "runner": runner, "args": parsed_args})
-    save_models(models)
-    print(f"Added {name!r} to {CONFIG}")
+    database = connect()
+    try:
+        database.execute(
+            "INSERT INTO models (name, model, runner, args) VALUES (?, ?, ?, ?)",
+            (name, model_path, runner, json.dumps(parsed_args)),
+        )
+        database.commit()
+    except sqlite3.IntegrityError:
+        print(f"A model named {name!r} already exists in {DATABASE}", file=sys.stderr)
+        return 2
+    finally:
+        database.close()
+    print(f"Added {name!r} to {DATABASE}")
     return 0
 
 
 def run(query=""):
     models = load_models()
     if not models:
-        print(f"No models in {CONFIG}. Add one with: ./run-model add", file=sys.stderr)
+        print(f"No models in {DATABASE}. Add one with: ./run-model add", file=sys.stderr)
         return 1
 
     labels = {f"{model['name']}  {model['model']}": model for model in models}
@@ -146,7 +163,7 @@ def run(query=""):
 def edit_model(query=""):
     models = load_models()
     if not models:
-        print(f"No models in {CONFIG}. Add one with: ./run-model add", file=sys.stderr)
+        print(f"No models in {DATABASE}. Add one with: ./run-model add", file=sys.stderr)
         return 1
 
     labels = {f"{model['name']}  {model['model']}": model for model in models}
@@ -154,33 +171,50 @@ def edit_model(query=""):
     if not selected:
         return 0
 
-    name = json.dumps(labels[selected]["name"])
-    line = next((
-        number for number, text in enumerate(CONFIG.read_text().splitlines(), 1)
-        if '"name"' in text and name in text
-    ), 1)
-    editor = os.environ.get("EDITOR") or shutil.which("nano") or shutil.which("vi")
-    if not editor:
-        print("Set $EDITOR or install nano/vi.", file=sys.stderr)
-        return 1
+    model = labels[selected]
+    print("Press Enter to keep the current value.")
+    name = ask("Name", model["name"]).strip()
+    if not name:
+        print("Name cannot be empty.", file=sys.stderr)
+        return 2
+    model_path = ask("Model path", model["model"])
+    runner = ask("Runner", model["runner"])
     try:
-        command = [*shlex.split(editor), f"+{line}", str(CONFIG)]
-        os.execvp(command[0], command)
-    except (OSError, ValueError, IndexError) as error:
-        print(f"Cannot start editor: {error}", file=sys.stderr)
-        return 126
+        parsed_args = shlex.split(ask("Server arguments", shlex.join(model["args"])))
+    except ValueError as error:
+        print(f"Invalid server arguments: {error}", file=sys.stderr)
+        return 2
+
+    database = connect()
+    try:
+        database.execute(
+            "UPDATE models SET name = ?, model = ?, runner = ?, args = ? WHERE id = ?",
+            (name, model_path, runner, json.dumps(parsed_args), model["id"]),
+        )
+        database.commit()
+    except sqlite3.IntegrityError:
+        print(f"A model named {name!r} already exists in {DATABASE}", file=sys.stderr)
+        return 2
+    finally:
+        database.close()
+    print(f"Updated {name!r}")
+    return 0
 
 
 def self_test():
-    entry = {
-        "name": "My Model",
-        "model": "/models/My Model.gguf",
-        "runner": "./llama server",
-        "args": shlex.split("--port 8888 --flash-attn on"),
-    }
-    assert [entry["runner"], "-m", entry["model"], *entry["args"]] == [
+    args = shlex.split("--port 8888 --flash-attn on")
+    database = sqlite3.connect(":memory:")
+    database.row_factory = sqlite3.Row
+    database.execute(SCHEMA)
+    database.execute(
+        "INSERT INTO models (name, model, runner, args) VALUES (?, ?, ?, ?)",
+        ("My Model", "/models/My Model.gguf", "./llama server", json.dumps(args)),
+    )
+    row = database.execute("SELECT * FROM models").fetchone()
+    assert [row["runner"], "-m", row["model"], *json.loads(row["args"])] == [
         "./llama server", "-m", "/models/My Model.gguf", "--port", "8888", "--flash-attn", "on"
     ]
+    database.close()
     print("self-test passed")
     return 0
 
@@ -190,7 +224,7 @@ def main():
     if arguments and arguments[0] == "add":
         return add_model(arguments[1:])
     if arguments == ["config"]:
-        print(CONFIG)
+        print(DATABASE)
         return 0
     if arguments and arguments[0] == "edit":
         return edit_model(" ".join(arguments[1:]))
