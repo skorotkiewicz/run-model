@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import readline
 import shlex
 import shutil
 import sqlite3
@@ -60,6 +61,17 @@ def ask(label, default=""):
     except (EOFError, KeyboardInterrupt):
         print()
         raise SystemExit(130)
+
+
+def edit_line(label, value):
+    readline.set_startup_hook(lambda: readline.insert_text(value))
+    try:
+        return input(f"{label}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        raise SystemExit(130)
+    finally:
+        readline.set_startup_hook()
 
 
 def connect():
@@ -180,7 +192,7 @@ def edit_model(query=""):
     model_path = ask("Model path", model["model"])
     runner = ask("Runner", model["runner"])
     try:
-        parsed_args = shlex.split(ask("Server arguments", shlex.join(model["args"])))
+        parsed_args = shlex.split(edit_line("Server arguments", shlex.join(model["args"])))
     except ValueError as error:
         print(f"Invalid server arguments: {error}", file=sys.stderr)
         return 2
