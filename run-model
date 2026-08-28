@@ -146,7 +146,7 @@ def add_model(arguments):
         parsed_args = (
             shlex.split(args.server_args)
             if args.server_args is not None
-            else read_arguments(ask("Server arguments", DEFAULT_ARGS))
+            else read_arguments(edit_line("Server arguments", DEFAULT_ARGS))
         )
     except ValueError as error:
         print(f"Invalid server arguments: {error}", file=sys.stderr)
