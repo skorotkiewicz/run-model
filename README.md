@@ -11,8 +11,8 @@ uv sync
 Run either version through the uv environment:
 
 ```bash
-uv run ./run-model       # SQLite
-uv run ./run-model.py    # JSON
+uv run ./run-model         # SQLite
+uv run ./run-model-json    # JSON
 ```
 
 ## Versions
@@ -20,7 +20,7 @@ uv run ./run-model.py    # JSON
 | Command | Storage | Notes |
 | --- | --- | --- |
 | `./run-model` | `models.db` | SQLite storage with JSON import and export |
-| `./run-model.py` | `models.json` | Human-readable JSON storage |
+| `./run-model-json` | `models.json` | Human-readable JSON storage |
 
 Both versions provide the same model selection, argument editor, and custom runner support.
 
