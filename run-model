@@ -197,6 +197,37 @@ def add_model(arguments):
     return 0
 
 
+def remove_model(query=""):
+    models = load_models()
+    if not models:
+        print(f"No models in {DATABASE}.", file=sys.stderr)
+        return 1
+
+    labels = {f"{model['name']}  {model['model']}": model for model in models}
+    selected = select(list(labels), "remove > ", query)
+    if not selected:
+        return 0
+
+    model = labels[selected]
+    try:
+        confirmed = input(f"Remove {model['name']!r} from the database? [y/N]: ").strip().casefold()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return 130
+    if confirmed not in {"y", "yes"}:
+        print("Cancelled.")
+        return 0
+
+    database = connect()
+    try:
+        database.execute("DELETE FROM models WHERE id = ?", (model["id"],))
+        database.commit()
+    finally:
+        database.close()
+    print(f"Removed {model['name']!r}. Model file was not deleted.")
+    return 0
+
+
 def run(query=""):
     models = load_models()
     if not models:
@@ -284,6 +315,8 @@ def main():
         return 0
     if arguments and arguments[0] == "edit":
         return edit_model(" ".join(arguments[1:]))
+    if arguments and arguments[0] == "remove":
+        return remove_model(" ".join(arguments[1:]))
     if arguments == ["--self-test"]:
         return self_test()
     if arguments and arguments[0] in {"-h", "--help"}:
@@ -291,6 +324,7 @@ def main():
             "Usage: run-model [SEARCH]\n"
             "       run-model add [MODEL] [--name NAME] [--runner PATH] [--args '...']\n"
             "       run-model edit [SEARCH]\n"
+            "       run-model remove [SEARCH]\n"
             "       run-model config"
         )
         return 0
