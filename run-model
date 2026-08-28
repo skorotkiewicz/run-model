@@ -143,6 +143,22 @@ def run(query=""):
         return 126
 
 
+def edit_config():
+    if not CONFIG.exists():
+        save_models([])
+
+    editor = os.environ.get("EDITOR") or shutil.which("nano") or shutil.which("vi")
+    if not editor:
+        print("Set $EDITOR or install nano/vi.", file=sys.stderr)
+        return 1
+    try:
+        command = [*shlex.split(editor), str(CONFIG)]
+        os.execvp(command[0], command)
+    except (OSError, ValueError, IndexError) as error:
+        print(f"Cannot start editor: {error}", file=sys.stderr)
+        return 126
+
+
 def self_test():
     entry = {
         "name": "My Model",
@@ -164,12 +180,15 @@ def main():
     if arguments == ["config"]:
         print(CONFIG)
         return 0
+    if arguments == ["edit"]:
+        return edit_config()
     if arguments == ["--self-test"]:
         return self_test()
     if arguments and arguments[0] in {"-h", "--help"}:
         print(
             "Usage: run-model [SEARCH]\n"
             "       run-model add [MODEL] [--name NAME] [--runner PATH] [--args '...']\n"
+            "       run-model edit\n"
             "       run-model config"
         )
         return 0
