@@ -78,3 +78,5 @@ Runner: ./test_runner
 ```
 
 Select that model through `run-model`. The test runner prints each received argument and exits.
+
+<!-- for remote in github origin; do git push "$remote" main; done -->
