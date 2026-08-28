@@ -4,7 +4,6 @@
 import argparse
 import json
 import os
-import readline
 import shlex
 import shutil
 import sqlite3
@@ -63,29 +62,53 @@ def ask(label, default=""):
         raise SystemExit(130)
 
 
-def edit_line(label, value):
-    readline.set_startup_hook(lambda: readline.insert_text(value))
-    try:
-        return input(f"{label}: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        raise SystemExit(130)
-    finally:
-        readline.set_startup_hook()
-
-
-def read_arguments(first_line):
+def format_arguments(arguments):
     lines = []
-    line = first_line
+    for argument in arguments:
+        quoted = shlex.quote(argument)
+        if argument.startswith("-") or not lines:
+            lines.append(quoted)
+        else:
+            lines[-1] += f" {quoted}"
+    return "\n".join(lines)
+
+
+def edit_arguments(arguments):
     try:
-        while line.rstrip().endswith("\\"):
-            lines.append(line.rstrip()[:-1])
-            line = input("... ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        raise SystemExit(130)
-    lines.append(line)
-    return shlex.split(" ".join(lines))
+        from prompt_toolkit import prompt
+        from prompt_toolkit.key_binding import KeyBindings
+    except ImportError:
+        raise SystemExit("Install dependencies with: uv sync")
+
+    bindings = KeyBindings()
+
+    @bindings.add("c-s")
+    @bindings.add("f2")
+    def save(event):
+        event.app.exit(result=event.app.current_buffer.text)
+
+    @bindings.add("c-c")
+    def cancel(event):
+        event.app.exit(result=None)
+
+    text = format_arguments(arguments)
+    error_message = ""
+    while True:
+        text = prompt(
+            "Server arguments\n> ",
+            default=text,
+            multiline=True,
+            key_bindings=bindings,
+            prompt_continuation=lambda width, line_number, is_soft_wrap: "... ",
+            bottom_toolbar=lambda: error_message or "Arrows move | Enter new line | Ctrl+S/F2 save | Ctrl+C cancel",
+            mouse_support=True,
+        )
+        if text is None:
+            return None
+        try:
+            return shlex.split(text)
+        except ValueError as error:
+            error_message = f"Invalid arguments: {error}"
 
 
 def connect():
@@ -146,11 +169,13 @@ def add_model(arguments):
         parsed_args = (
             shlex.split(args.server_args)
             if args.server_args is not None
-            else read_arguments(edit_line("Server arguments", DEFAULT_ARGS))
+            else edit_arguments(shlex.split(DEFAULT_ARGS))
         )
     except ValueError as error:
         print(f"Invalid server arguments: {error}", file=sys.stderr)
         return 2
+    if parsed_args is None:
+        return 130
 
     database = connect()
     try:
@@ -208,11 +233,9 @@ def edit_model(query=""):
         return 2
     model_path = ask("Model path", model["model"])
     runner = ask("Runner", model["runner"])
-    try:
-        parsed_args = read_arguments(edit_line("Server arguments", shlex.join(model["args"])))
-    except ValueError as error:
-        print(f"Invalid server arguments: {error}", file=sys.stderr)
-        return 2
+    parsed_args = edit_arguments(model["args"])
+    if parsed_args is None:
+        return 130
 
     database = connect()
     try:
